@@ -79,7 +79,7 @@ jobs:
           python -m repopulse.export_site --db md:repopulse --schema main_public \
             --runs runs.csv --git-sha "$GITHUB_SHA" --out _site
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
@@ -98,10 +98,10 @@ jobs:
       group: pages-deploy
       cancel-in-progress: false
     steps:
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
 
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
   pages-preview:
     name: Pages preview (fixture, no deploy)
