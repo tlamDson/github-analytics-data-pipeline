@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ROOT / "transform" / "profiles.yml"
@@ -67,8 +69,22 @@ def test_no_password_or_inline_key_material():
         assert "SNOWFLAKE_" not in value or "env_var(" in value, (key, value)
 
 
-def test_pyproject_has_a_separate_snowflake_extra():
+def dbt_snowflake_requirement() -> Requirement:
     deps = extras()
     assert "snowflake" in deps
-    assert any(re.match(r"dbt-snowflake\s*>=\s*1\.8", d) for d in deps["snowflake"]), deps
-    assert not any(d.startswith("dbt-snowflake") for d in deps["dbt"]), deps["dbt"]
+    named = [r for r in map(Requirement, deps["snowflake"]) if r.name == "dbt-snowflake"]
+    assert len(named) == 1, deps["snowflake"]
+    return named[0]
+
+
+def test_pyproject_has_a_separate_snowflake_extra():
+    dbt_snowflake_requirement()
+    deps = extras()
+    assert not any(Requirement(d).name == "dbt-snowflake" for d in deps["dbt"]), deps["dbt"]
+
+
+def test_snowflake_extra_requires_dbt_snowflake_1_12_5_or_newer():
+    # A floor check, not one exact version string: Dependabot bumps of the floor keep it green.
+    req = dbt_snowflake_requirement()
+    floors = [Version(s.version) for s in req.specifier if s.operator == ">="]
+    assert floors and max(floors) >= Version("1.12.5"), str(req)
