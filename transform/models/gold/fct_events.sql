@@ -9,11 +9,13 @@
 -- an actor twice is harmless; skipping one is not, so the watermark comes from this table.
 -- On Databricks the strategy is merge on event_id (an upsert): the batch has one row per
 -- event_id, so it leaves the same table as delete+insert (docs/dbt-databricks.md).
+-- append_new_columns lets a normal run add loaded_at to a table built without it (load_watermark
+-- then recomputes every actor once).
 {{ config(
     materialized='incremental',
     incremental_strategy=('merge' if target.type == 'databricks' else 'delete+insert'),
     unique_key='event_id',
-    on_schema_change='fail'
+    on_schema_change='append_new_columns'
 ) }}
 
 with staged as (
@@ -25,9 +27,7 @@ with staged as (
 touched_actors as (
     select distinct actor_id
     from staged
-    where loaded_at > (
-        select coalesce(max(loaded_at), cast('1970-01-01' as timestamp)) from {{ this }}
-    )
+    where loaded_at > {{ load_watermark(this) }}
 ),
 {%- endif %}
 
