@@ -410,8 +410,10 @@ def test_timestamptz_near_midnight_keeps_utc_date_and_week(tmp_path):
 # ---------------------------------------------------------------- invariant 6: dim_user writes
 #
 # A run writes dim_user (gold and its masked public copy) in proportion to its new rows (ticket
-# T-0043). How a written row is seen: before a run every is_bot of both tables is flipped, so a row
-# the run leaves alone stays flipped and a row the run writes has the right value again.
+# T-0043). How a written row is seen: before a run is_bot of every gold row and is_current of every
+# public row are flipped, so a row the run leaves alone stays flipped and a row the run writes has
+# the right value again. The two columns differ on purpose: gold is_current stays right, so a public
+# row copied again from an untouched gold row shows up as written.
 
 DIM_USER = f"{GOLD_SCHEMA}.dim_user"
 PUB_DIM_USER = f"{PUBLIC_SCHEMA}.dim_user"
@@ -449,22 +451,26 @@ def _rows(db: Path, sql: str) -> list[tuple]:
         con.close()
 
 
-def _flip_is_bot(db: Path) -> None:
-    _execute(db, *(f"UPDATE {t} SET is_bot = NOT is_bot" for t in (DIM_USER, PUB_DIM_USER)))
+def _flip_marks(db: Path) -> None:
+    _execute(
+        db,
+        f"UPDATE {DIM_USER} SET is_bot = NOT is_bot",
+        f"UPDATE {PUB_DIM_USER} SET is_current = NOT is_current",
+    )
 
 
 def _written(db: Path) -> dict[str, set[str]]:
-    """table -> actors with a row written since ``_flip_is_bot`` (masked ids for public)."""
+    """table -> actors with a row written since ``_flip_marks`` (masked ids for public)."""
     salt = ci_salt()
-    is_bot = {
-        hash_pii(key, salt): bot
-        for key, bot in _rows(db, f"SELECT user_key, {BOT_RULE} FROM {DIM_USER}")
+    is_current = {
+        hash_pii(key, salt): current
+        for key, current in _rows(db, f"SELECT user_key, is_current FROM {DIM_USER}")
     }
     gold = _rows(db, f"SELECT DISTINCT actor_id FROM {DIM_USER} WHERE is_bot = {BOT_RULE}")
-    public = _rows(db, f"SELECT user_key, actor_id, is_bot FROM {PUB_DIM_USER}")
+    public = _rows(db, f"SELECT user_key, actor_id, is_current FROM {PUB_DIM_USER}")
     return {
         DIM_USER: {str(actor) for (actor,) in gold},
-        PUB_DIM_USER: {actor for key, actor, bot in public if is_bot[key] == bot},
+        PUB_DIM_USER: {actor for key, actor, current in public if is_current[key] == current},
     }
 
 
@@ -514,7 +520,7 @@ def dim_user_db(batches, tmp_path) -> Path:
 
 
 def test_late_event_writes_only_its_actor(dim_user_db, batches, tmp_path):
-    _flip_is_bot(dim_user_db)
+    _flip_marks(dim_user_db)
     _run_dim_user(tmp_path, dim_user_db, batches["b2"])  # carol-old, before every carol event
     assert _versions(dim_user_db, 1003) == [
         ("1003-1", "carol-old", False),
@@ -524,7 +530,7 @@ def test_late_event_writes_only_its_actor(dim_user_db, batches, tmp_path):
 
 
 def test_login_change_writes_only_the_actors_of_the_batch(dim_user_db, batches, tmp_path):
-    _flip_is_bot(dim_user_db)
+    _flip_marks(dim_user_db)
     _run_dim_user(tmp_path, dim_user_db, batches["b3"])  # bob was bobby, dave is now dave2
     assert _versions(dim_user_db, 1002)[0] == ("1002-1", "bobby", False)
     assert [v[1:] for v in _versions(dim_user_db, 1004)] == [("dave", False), ("dave2", True)]
@@ -539,7 +545,7 @@ def test_login_change_writes_only_the_actors_of_the_batch(dim_user_db, batches, 
 
 @pytest.mark.parametrize("batch", ["b1", "empty"])
 def test_rerun_without_new_events_writes_no_dim_user_row(dim_user_db, batches, tmp_path, batch):
-    _flip_is_bot(dim_user_db)
+    _flip_marks(dim_user_db)
     _run_dim_user(tmp_path, dim_user_db, batches[batch])
     assert _written(dim_user_db) == _expected_written(set())
 

@@ -547,6 +547,32 @@ def test_dim_user_incremental_strategy_per_adapter(model, prefix, strategy):
     assert cfg.get("unique_key") == "user_key"
 
 
+def _watermark(columns: list[str], relation: str = "gold.dim_user") -> str:
+    """``load_watermark`` rendered for a relation with these columns."""
+
+    class _Adapter:
+        @staticmethod
+        def get_columns_in_relation(rel):
+            assert rel == relation
+            return [{"name": c} for c in columns]
+
+    text = (MACROS / "load_watermark.sql").read_text(encoding="utf-8")
+    module = jinja2.Environment().from_string(text, globals={"adapter": _Adapter()}).module
+    return " ".join(str(module.load_watermark(relation)).split())
+
+
+@pytest.mark.parametrize("name", ["loaded_at", "LOADED_AT"], ids=["duckdb-databricks", "snowflake"])
+def test_load_watermark_reads_loaded_at_whatever_the_adapter_case(name):
+    assert _watermark(["user_key", name]) == (
+        "(select coalesce(max(loaded_at), cast('1970-01-01' as timestamp)) from gold.dim_user)"
+    )
+
+
+def test_load_watermark_of_a_table_without_loaded_at_does_not_reference_it():
+    sql = _watermark(["USER_KEY", "ACTOR_ID"])
+    assert sql == "cast('1970-01-01' as timestamp)"
+
+
 def _parse(work: Path, dbt_vars: dict | None = None) -> dict:
     pytest.importorskip("dbt.cli.main", reason="dbt extra not installed")
     pytest.importorskip("dbt.adapters.duckdb", reason="dbt-duckdb not installed")
