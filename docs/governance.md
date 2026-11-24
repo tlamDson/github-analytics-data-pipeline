@@ -52,7 +52,8 @@ Seeds (`fixture_silver_gharchive_events`, `repos_data_ecosystem`) are outside th
 ## The `public` schema and how masking works
 
 Models in `transform/models/public/` (named `pub_*`, with aliases keeping the gold names) go into the `public` schema
-(`main_public` on DuckDB), materialized as **table**:
+(`main_public` on DuckDB), materialized as **table** (`dim_user`: incremental, also a table; after a
+change of `PII_HASH_SALT` run with `--full-refresh`, `docs/dbt-models.md`):
 
 | Relation | Source | Masked |
 |---|---|---|

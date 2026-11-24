@@ -3,7 +3,8 @@
 The scheduled pipeline (``.github/workflows/pipeline.yml``) gets a fresh lake on every run, so the
 silver parquet handed to dbt only holds the hours of that run. ``stg_gharchive_events`` therefore
 accumulates silver across runs (insert event ids not seen yet, existing copy wins) and
-``fct_events`` is incremental; dims and marts are rebuilt from the accumulated history.
+``dim_user``, ``pub_dim_user`` and ``fct_events`` are incremental (touched actors only); the marts
+are rebuilt from the accumulated history.
 
 Batches (built from the raw fixtures with ``silver_select_sql`` of dbt_helpers.py, no Spark):
 

@@ -2,7 +2,7 @@ name: Pipeline (scheduled)
 
 # Hourly incremental batch (not streaming, not real-time): ingest GH Archive hour files ->
 # PySpark + Delta bronze/silver -> export silver to parquet -> dbt build (incremental staging +
-# fct_events, dims and marts rebuilt) -> one runs.csv row in the `pipeline-run-<run_id>` artifact.
+# dim_user + fct_events, marts rebuilt) -> one runs.csv row in the `pipeline-run-<run_id>` artifact.
 # Merge that row into runs.csv with `python benchmarks/record_run.py <artifact csv>...`.
 #
 # Fallback path (docs/probe-result.md): Spark runs on this runner with a fresh lake per run, gold

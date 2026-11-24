@@ -4,8 +4,9 @@ The dbt project is in `transform/`. Gold is a star schema (`fct_events`, `dim_us
 six marts answering Q1–Q6 (`docs/plan.md`). The canonical definition of each metric is
 `benchmarks/queries/qN.sql`; the mart gives the **same column names, same semantics and same results** as the
 corresponding query on the same data (deduplicated by `event_id`), with a matching test
-(`tests/test_dbt_marts.py`). `stg_gharchive_events` and `fct_events` are incremental (section
-"Incremental" below); dims and marts are `table`s, rebuilt each time from the accumulated history.
+(`tests/test_dbt_marts.py`). `stg_gharchive_events`, `dim_user`, `fct_events` and the public copy of
+`dim_user` are incremental (section "Incremental" below); `dim_repo`, the marts and the other public
+models are `table`s, rebuilt each time from the accumulated history.
 
 ## Diagram
 
@@ -91,17 +92,25 @@ the hours of that run. History lives in gold (MotherDuck), specifically in stagi
 |---|---|---|
 | `stg_gharchive_events` | `incremental`, `append`, `full_refresh: false` | Inserts `event_id`s not yet present; an existing copy wins (like silver's MERGE). Column `loaded_at` = the `run_started_at` (UTC) of the dbt run that inserted the row |
 | `fct_events` | `incremental`, `delete+insert` by `event_id` (`merge` on Databricks, same result) | Recomputes **all** facts of "touched" actors: actors that have a staging row with `loaded_at` greater than the `max(loaded_at)` of `fct_events` itself |
-| `dim_user`, `dim_repo`, 6 marts | `table` | Rebuilt from all of staging |
+| `dim_user` | `incremental`, `delete+insert` by `user_key` (`merge` on Databricks, same result) | Recomputes **all** versions of touched actors: actors that have a staging row with `loaded_at` greater than the `max(loaded_at)` of `dim_user` itself. Column `loaded_at` = the newest `loaded_at` of the actor's staging rows, the same on every version |
+| `public.dim_user` | as `dim_user`, by the masked `user_key` | Masks and writes the `dim_user` rows with `loaded_at` greater than its own `max(loaded_at)` |
+| `dim_repo`, 6 marts, the other public models | `table` | Rebuilt from all of their input |
 
 Why recompute the whole actor: a late-arriving event (even on a repo outside the seed, which does not become a fact) can
 insert an earlier login version into `dim_user`, shifting the `version_number` (and so the `user_key`) of every
 later event of that actor. Recomputing an actor twice is harmless; missing one is wrong, so the watermark is taken from
 `fct_events` itself.
 
+`dim_user` follows the same rule, so a run writes it (and its public copy) in proportion to the new rows instead
+of rewriting every actor ever seen. Staging only appends, and adding an event never lowers the number of versions
+of an actor, so no `user_key` is left behind. A table built before `dim_user` had `loaded_at` is upgraded by a
+normal run (macro `load_watermark` + `on_schema_change: append_new_columns`): that run recomputes every actor once.
+
 Invariants with tests (`tests/test_dbt_incremental.py`): building batch by batch on one DuckDB file gives exactly
 the same rows, column by column, as one full build over the union of the batches (except `loaded_at`); re-running an old batch,
 a duplicate batch or an empty batch changes no table; no duplicate `event_id`; a late event shifts the version of
-old facts; `--full-refresh` keeps the accumulated staging.
+old facts; `--full-refresh` keeps the accumulated staging; `dim_user` and its public copy write only the touched
+actors and nothing on a re-run, and equal their own full refresh, `loaded_at` included.
 
 **When `--full-refresh` is needed** (the `full_refresh` input of `workflow_dispatch` in
 `pipeline.yml`):
@@ -110,8 +119,10 @@ old facts; `--full-refresh` keeps the accumulated staging.
   old events of a newly added repo do not become facts.
 - Changing the SQL logic of `fct_events` or changing columns (the model sets `on_schema_change: fail`; changing columns
   without a full refresh makes `dbt build` fail).
+- Changing the SQL logic of `dim_user` (versions, `is_bot`) or of its public copy, or changing `PII_HASH_SALT`: a
+  normal run only rewrites the touched actors, so the others would keep the old rule or the old salt.
 
-`--full-refresh` rebuilds `fct_events` from staging but does **not** touch `stg_gharchive_events`
+`--full-refresh` rebuilds `dim_user`, its public copy and `fct_events` from staging but does **not** touch `stg_gharchive_events`
 (`full_refresh: false`): staging is the only place that keeps history, the lake is gone. To rebuild staging too,
 the table must be dropped by hand and the silver of every hour reloaded (no procedure yet).
 
