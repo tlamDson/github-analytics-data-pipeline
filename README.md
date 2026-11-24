@@ -146,15 +146,17 @@ Real GH Archive data (not simulated): the same incremental batch (ingest, bronze
 
 | variant | data_date | total_seconds | q1_seconds | q2_seconds | q3_seconds | q4_seconds | q5_seconds | q6_seconds | row_count | status | trigger | ingest_seconds | spark_seconds | export_seconds | databricks_seconds | warehouse_seconds | dbt_seconds | queries_seconds | queue_seconds | setup_seconds | job_queue_seconds | job_setup_seconds | warehouse_start_seconds | bronze_rows | run_id | run_at | git_sha |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| path-a-runner | 2026-10-25 | 56.49300000000001 | 0.25826 | 0.059017 | 0.059248 | 0.05919 | 0.059446 | 0.059322 | 68488 | success | push | 1.635 | 24.605 | 11.017 | — | — | 17.795 | 1.441 | 2.0 | 22.149878 | — | — | — | 68488 | 43175427031 | 2026-11-12T07:27:53+00:00 | 52c9d56 |
-| path-b-databricks | 2026-10-25 | 162.142 | 0.822 | 0.758 | 0.833 | 0.76 | 0.724 | 0.778 | 0 | success | push | 2.095 | — | — | 50.846 | 0.206 | 104.253 | 4.742 | 2.0 | 28.303435 | — | 3.0 | 0.0 | 68488 | 43175427031 | 2026-11-12T07:27:52+00:00 | 52c9d56 |
+| path-a-runner | 2026-11-24 | 72.97800000000001 | 0.203042 | 0.074352 | 0.076717 | 0.074157 | 0.07451 | 0.074795 | 2805 | success | schedule | 0.681 | 27.461 | 15.39 | — | — | 27.707 | 1.739 | 2.0 | 48.567768 | — | — | — | 2806 | 45321311575 | 2026-11-24T03:42:16+00:00 | 4d70af5 |
+| path-b-databricks | 2026-11-23 | 5.456 | — | — | — | — | — | — | — | failed | schedule | 1.003 | — | — | 4.453 | — | — | — | 2.0 | 33.503816 | — | — | — | — | 45241171774 | 2026-11-23T18:42:23+00:00 | 2febca7 |
 
 Every run, counted by variant and trigger:
 
 | variant | trigger | runs | successes | e2e_p50_seconds | e2e_p95_seconds |
 | --- | --- | --- | --- | --- | --- |
 | path-a-runner | push | 2 | 2 | 55.344 | 56.49300000000001 |
+| path-a-runner | schedule | 283 | 278 | 58.43300000000001 | 73.13400000000001 |
 | path-b-databricks | push | 2 | 2 | 162.142 | 217.882 |
+| path-b-databricks | schedule | 274 | 80 | 239.91800000000003 | 262.341 |
 
 ### Delta Lake vs Apache Iceberg (real GH Archive data)
 

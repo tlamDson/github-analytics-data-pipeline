@@ -14,8 +14,8 @@ Workflow `.github/workflows/dbt-databricks.yml` (run manually):
   `feature/dbt-databricks-target` (filtered by `paths`), so it can run within the PR. There is no
   `pull_request` and no schedule: Free Edition has a daily quota.
 - Path B of `.github/workflows/path-comparison.yml` (D3, `docs/path-comparison.md`) runs the same
-  `dbt build --target databricks` with the same `DBT_DATABRICKS_SCHEMA=repopulse_dbt` on an hourly schedule
-  (after release), so the `repopulse_dbt_*` schemas are also written from there. Staging only inserts new `event_id`s,
+  `dbt build --target databricks` with the same `DBT_DATABRICKS_SCHEMA=repopulse_dbt` when it is dispatched
+  by hand, so the `repopulse_dbt_*` schemas are also written from there. Staging only inserts new `event_id`s,
   so the two workflows writing alternately produce no duplicate rows.
 - Missing `DATABRICKS_HOST` or `DATABRICKS_TOKEN`: the Databricks steps are skipped at step level, with a
   `::notice`, the workflow stays green, and there is no `runs.csv` row.

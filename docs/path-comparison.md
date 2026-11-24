@@ -2,7 +2,7 @@
 
 Task D3 of Plan v2 (`docs/plan.md`, section "Primary-path selection rule"): run the **same** incremental
 batch pipeline (ingest → bronze/silver → gold → the Q1–Q6 set) on two paths, on the **same** window of
-real GH Archive data (not simulated), enough times on a schedule, then aggregate p50/p95 and the
+real GH Archive data (not simulated), enough times on a schedule (an hourly cron, now removed), then aggregate p50/p95 and the
 success rate only from `runs.csv`. The path-selection rule is applied by D4; this PR does not choose. D4 applies the rule with
 `python -m repopulse.pathdecision --runs runs.csv --doc docs/probe-result.md` (the result and how it is measured are in
 [`probe-result.md`](probe-result.md)).
@@ -14,15 +14,15 @@ success rate only from `runs.csv`. The path-selection rule is applied by D4; thi
 
 ## Workflow `.github/workflows/path-comparison.yml`
 
-- **Triggers:** `schedule` hourly at minute 41 (`pipeline.yml` runs at minute 23), `workflow_dispatch`
-  (optional inputs `date`, `hour`, `hours`), and `push` only on the branch `feature/pipeline-path-comparison`
-  (filtered by `paths`) so it can run in this PR. There is no `pull_request`. **Cron and dispatch only run when
-  the file is on `main`**, i.e. after the next release; before that only the run caused by a push on the PR branch exists.
+- **Triggers:** `workflow_dispatch` (optional inputs `date`, `hour`, `hours`; only runs when the file is on
+  `main`), and `push` only on the branch `feature/pipeline-path-comparison` (filtered by `paths`) so it could
+  run in the D3 PR. There is no `pull_request` and no `schedule`: the hourly cron was removed once D4 had its
+  scheduled rows (section "The cron is removed" below).
 - **The data window is decided once** in the `window` job (`python -m repopulse.pathcompare window`);
   the two path jobs share `needs.window.outputs`:
   - inputs `date` + `hour` (must come together), `hours` 1..6, default 1;
   - `push`: the benchmark reference day `benchmarks/reference.toml`, last hour 23, 1 hour (as in D1);
-  - `schedule` or dispatch without `date`: hour `floor(now UTC) - 2h`, 1 hour.
+  - dispatch without `date`: hour `floor(now UTC) - 2h`, 1 hour.
 - **Two independent jobs** (`path-a`, `path-b`, both `needs: window`): one path failing does not lose
   the other path's row.
 - **Does not touch A's production:** A's gold is written to the MotherDuck database `repopulse_path_a`
@@ -139,11 +139,12 @@ of `total_seconds` over successful runs (copying the cell of the selected run ve
 not re-printed through a float). The README does not copy the path-selection conclusion; the conclusion is in
 [`probe-result.md`](probe-result.md).
 
-## Turning off the cron once D4 has enough runs
+## The cron is removed
 
-The workflow only runs on schedule after release to `main`. Once D4 has enough runs: disable it in the
-Actions tab (or `gh workflow disable path-comparison.yml`, done by the repo owner), or open a PR removing the
-`schedule:` block. Databricks Free Edition has a daily quota; when it is exceeded compute is off until the end of the day,
-and those runs record `status=failed` on path B, which is exactly the data D4 needs.
+The scheduled rows are in `runs.csv` and the rule is applied ([`probe-result.md`](probe-result.md)), so the workflow no
+longer has a `schedule:` block: each scheduled run wrote a second copy of the data to the MotherDuck database
+`repopulse_path_a`. A cron runs from the file on `main`, so the old one keeps firing until the next release, or until
+the repo owner runs `gh workflow disable path-comparison.yml`. Dropping the database `repopulse_path_a` is also the
+repo owner's decision (it cannot be undone; `md-ensure` creates it again, empty, on the next dispatch).
 
 This document does not copy numbers; measurements are read only from `runs.csv`.

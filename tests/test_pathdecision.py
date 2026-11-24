@@ -422,9 +422,32 @@ def test_cli_missing_doc_exit_2(tmp_path):
 # ---------------------------------------------------------------- the real repo
 
 
-def test_repo_decision_is_insufficient_data_and_keeps_a():
+def test_repo_decision_applies_the_rule_to_the_scheduled_rows_and_keeps_a():
     d = pd.decide(pc.read_runs(ROOT / "runs.csv"))
-    assert (d.chosen, d.switch, d.outcome) == (A, False, "insufficient-data")
+    assert (d.chosen, d.switch, d.outcome, d.rule) == (A, False, "only-eligible-path", 1)
+    assert d.full_days
+    assert (d.verdicts[A].eligible, d.verdicts[B].eligible) == (True, False)
+
+
+def test_repo_runs_csv_has_each_scheduled_run_of_a_path_once():
+    rows = pd.scheduled(pc.read_runs(ROOT / "runs.csv"))
+    for variant in (A, B):
+        ids = [r.notes["run_id"] for r in rows if r.variant == variant]
+        assert ids, variant
+        assert len(ids) == len(set(ids)), variant
+
+
+def test_repo_probe_result_states_the_cause_of_the_failed_scheduled_runs():
+    doc = (ROOT / "docs" / "probe-result.md").read_text(encoding="utf-8")
+    section = doc.split("## Cause of the failed scheduled runs", 1)
+    assert len(section) == 2, "probe-result.md does not state why the scheduled runs failed"
+    body = section[1].split("\n## ", 1)[0]
+    rows = pd.scheduled(pc.read_runs(ROOT / "runs.csv"))
+    for variant in (A, B):
+        mine = [r for r in rows if r.variant == variant]
+        failed = [r for r in mine if r.notes["status"] == "failed"]
+        assert f"{len(failed)} of {len(mine)} `{variant}`" in body
+    assert "FEATURE_DISABLED" in body
 
 
 def test_repo_probe_result_block_matches_runs_csv():

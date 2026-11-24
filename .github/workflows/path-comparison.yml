@@ -1,6 +1,6 @@
 name: Path comparison (A runner + MotherDuck vs B Databricks)
 
-# D3 (docs/plan.md, docs/path-comparison.md): the same hourly incremental batch end to end on
+# D3 (docs/plan.md, docs/path-comparison.md): the same incremental batch end to end on
 # both candidate paths, on the same data window:
 #   A = this runner: ingest -> PySpark + Delta bronze/silver -> silver export -> dbt build on
 #       MotherDuck (database repopulse_path_a, never `repopulse` of pipeline.yml) -> Q1-Q6.
@@ -17,15 +17,14 @@ name: Path comparison (A runner + MotherDuck vs B Databricks)
 # with `python benchmarks/record_run.py out/path-a-row.csv out/path-b-row.csv`.
 #
 # Triggers:
-# - schedule (hourly, minute 41; pipeline.yml uses 23) and workflow_dispatch only run once this
-#   file is on `main`, the default branch, i.e. after the next release. Schedule window: the hour
-#   floor(now UTC) - 2h, 1 hour. Dispatch inputs date/hour/hours are optional.
+# - workflow_dispatch only runs once this file is on `main`, the default branch. Inputs
+#   date/hour/hours are optional; without date the window is the hour floor(now UTC) - 2h, 1 hour.
+# - No schedule: the hourly cron was removed once D4 had its scheduled rows
+#   (docs/probe-result.md), so nothing writes a second copy to MotherDuck every hour.
 # - push is limited to the branch feature/pipeline-path-comparison (paths below) so the
 #   workflow runs inside its own PR, always on the benchmark reference day
 #   (benchmarks/reference.toml), hour 23, 1 hour. After the merge the branch is deleted and the
 #   push trigger no longer fires. No pull_request: the cloud accounts are written only here.
-# Stop the cron once D4 has enough rows: disable the workflow in the Actions tab
-# (`gh workflow disable path-comparison.yml`) or remove the schedule in a PR.
 #
 # Concurrency: one run of this workflow at a time (queued, never cancelled; GitHub keeps only the
 # newest pending run). Job B also shares the group of databricks-bronze-silver.yml (D1), so two
@@ -38,8 +37,6 @@ name: Path comparison (A runner + MotherDuck vs B Databricks)
 # them; no step prints them; hostnames and the warehouse path are masked.
 
 on:
-  schedule:
-    - cron: "41 * * * *"
   workflow_dispatch:
     inputs:
       date:
