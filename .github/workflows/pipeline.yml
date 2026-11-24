@@ -11,8 +11,9 @@ name: Pipeline (scheduled)
 #
 # Triggers:
 # - schedule (hourly, minute 23) and workflow_dispatch only run once this file is on `main`, the
-#   default branch, i.e. after the next release. They write the `repopulse` database on
-#   MotherDuck and need the repo secrets MOTHERDUCK_TOKEN and PII_HASH_SALT (checked first).
+#   default branch, i.e. after the next release. They write the gold database on MotherDuck
+#   (repository variable MOTHERDUCK_DATABASE, unset = `repopulse`,
+#   docs/motherduck-storage.md) and need the repo secrets MOTHERDUCK_TOKEN and PII_HASH_SALT (checked first).
 #   Each scheduled run takes the last 3 hours (now - 2h back), so an hour GH Archive publishes
 #   late is picked up by a later run; staging keeps one row per event id.
 # - pull_request (path-filtered; not a required check, so `paths:` is fine here unlike ci.yml):
@@ -71,6 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
+      # Empty = `repopulse` (transform/profiles.yml). Pull requests never see the setting.
+      MOTHERDUCK_DATABASE: ${{ github.event_name != 'pull_request' && vars.MOTHERDUCK_DATABASE || '' }}
       DBT_TARGET: ${{ github.event_name == 'pull_request' && 'ci' || 'motherduck' }}
       VARIANT: ${{ github.event_name == 'pull_request' && 'pipeline-pr-smoke' || 'pipeline-incremental' }}
       FULL_REFRESH: ${{ inputs.full_refresh && 'true' || 'false' }}
