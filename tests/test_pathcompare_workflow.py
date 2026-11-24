@@ -73,21 +73,13 @@ def comments():
 # ---------------------------------------------------------------- triggers
 
 
-def test_triggers_are_schedule_dispatch_and_push_to_this_branch():
+def test_triggers_are_dispatch_and_push_to_this_branch_without_a_schedule():
     on = triggers(load())
-    assert set(on) == {"schedule", "workflow_dispatch", "push"}
+    assert set(on) == {"workflow_dispatch", "push"}
     assert "pull_request" not in on and "pull_request_target" not in on
     assert on["push"]["branches"] == [BRANCH]
     paths = set(on["push"]["paths"])
     assert {".github/workflows/path-comparison.yml", "repopulse/pathcompare.py"} <= paths
-
-
-def test_cron_is_hourly_on_another_minute_than_the_pipeline():
-    (entry,) = triggers(load())["schedule"]
-    match = re.fullmatch(r"(\d{1,2}) \* \* \* \*", entry["cron"])
-    assert match, entry["cron"]
-    assert int(match.group(1)) != 23
-    assert 0 <= int(match.group(1)) <= 59
 
 
 def test_dispatch_inputs_are_optional():
