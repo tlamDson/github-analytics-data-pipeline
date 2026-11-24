@@ -523,6 +523,43 @@ def test_unknown_silver_source_is_a_compile_error():
         render_model(STAGING, "duckdb", {"silver_gharchive_source": "lake"})
 
 
+def _fct_incremental_sql(prefix: str, columns: list[str]) -> str:
+    """fct_events rendered for an incremental run over an existing table with these columns."""
+
+    class _Adapter:
+        @staticmethod
+        def get_columns_in_relation(relation):
+            assert relation == "__this__"
+            return [{"name": c} for c in columns]
+
+    macro = MACROS / "load_watermark.sql"
+    context = {"config": lambda **kw: "", "ref": lambda name: f"__ref__{name}", "this": "__this__"}
+    context |= {"is_incremental": lambda: True, "target": {"type": prefix}, "adapter": _Adapter()}
+    text = macro.read_text(encoding="utf-8") if macro.exists() else ""
+    module = jinja2.Environment().from_string(text, globals=context).module
+    if macro.exists():
+        context["load_watermark"] = module.load_watermark
+    sql = jinja2.Environment().from_string(FCT.read_text(encoding="utf-8")).render(**context)
+    return " ".join(strip_comments_and_strings(sql).split())
+
+
+@pytest.mark.parametrize(
+    ("prefix", "columns"),
+    [
+        ("databricks", ["event_id", "actor_id"]),
+        ("duckdb", ["event_id", "actor_id"]),
+        ("snowflake", ["EVENT_ID", "ACTOR_ID"]),
+    ],
+)
+def test_fct_events_reads_its_watermark_only_from_a_table_with_loaded_at(prefix, columns):
+    """Without the column, max(loaded_at) would bind to the outer staging row (T-0097)."""
+    marker = "LOADED_AT" if prefix == "snowflake" else "loaded_at"
+    new = _fct_incremental_sql(prefix, [*columns, marker])
+    assert "max(loaded_at)" in new and "from __this__" in new
+    old = _fct_incremental_sql(prefix, columns)
+    assert "max(loaded_at)" not in old and "__this__" not in old
+
+
 @pytest.mark.parametrize(
     ("prefix", "strategy"),
     [("databricks", "merge"), ("duckdb", "delete+insert"), ("snowflake", "delete+insert")],
