@@ -51,7 +51,8 @@ models:
       the same actor_id (order created_at, event_id). valid_from = first event of the version,
       valid_to = valid_from of the next version (half-open), NULL for the current version.
       Two logins in the same second give a zero-length version (valid_from = valid_to), valid
-      only at that instant.
+      only at that instant. Incremental (delete+insert on user_key): each run recomputes every
+      version of the actors with staging rows newer than max(loaded_at).
     config:
       contract:
         enforced: true
@@ -101,6 +102,15 @@ models:
         data_type: boolean
         constraints:
           - type: not_null
+      - name: loaded_at
+        description: >
+          Newest loaded_at of the actor's stg_gharchive_events rows, the same on every version of
+          the actor (UTC). Not a business column: max(loaded_at) is the watermark of the
+          incremental run. No not_null constraint: a run adds it to tables built without it.
+        config: {meta: {pii: none}}
+        data_type: timestamp
+        data_tests:
+          - not_null
 
   - name: fct_events
     description: >
@@ -205,6 +215,9 @@ unit_tests:
   - name: dim_user_login_change_starts_new_version
     description: A rename yields 2 versions with touching, non-overlapping validity; bots flagged.
     model: dim_user
+    overrides:
+      macros:
+        is_incremental: false
     given:
       - input: ref('stg_gharchive_events')
         rows:
@@ -228,6 +241,9 @@ unit_tests:
       a -> b -> a gives 3 versions (islands, not distinct logins); input order does not matter,
       ties on created_at are broken by event_id.
     model: dim_user
+    overrides:
+      macros:
+        is_incremental: false
     given:
       - input: ref('stg_gharchive_events')
         rows:
@@ -249,6 +265,9 @@ unit_tests:
       Login a then b in the same second (tie broken by event_id): version 1 is the zero-length
       [t, t], version 2 starts at the same t and stays current.
     model: dim_user
+    overrides:
+      macros:
+        is_incremental: false
     given:
       - input: ref('stg_gharchive_events')
         rows:
@@ -261,6 +280,41 @@ unit_tests:
            valid_to: "2026-01-01 10:00:00", is_current: false}
         - {user_key: "8-2", actor_login: b, version_number: 2, valid_from: "2026-01-01 10:00:00",
            valid_to: null, is_current: true}
+
+  - name: dim_user_incremental_recomputes_every_version_of_touched_actors
+    description: >
+      Incremental run. Actor 7 gets a late event with an earlier login: both versions are emitted
+      with the actor's newest loaded_at. Actor 9 has nothing newer than the watermark and is not
+      emitted.
+    model: dim_user
+    overrides:
+      macros:
+        is_incremental: true
+        # load_watermark reads the columns of the real table, which a fixture `this` is not
+        load_watermark: "cast('2026-01-10 00:00:00' as timestamp)"
+    given:
+      # format sql: dict rows for `this` need the table to exist already (not true on a fresh CI DB)
+      - input: this
+        format: sql
+        rows: |
+          select * from (values
+              ('7-1', 7, timestamp '2026-01-10 00:00:00'),
+              ('9-1', 9, timestamp '2026-01-10 00:00:00')
+          ) as t (user_key, actor_id, loaded_at)
+      - input: ref('stg_gharchive_events')
+        rows:
+          - {event_id: "30", actor_id: 7, actor_login: old, created_at: "2025-12-31 00:00:00",
+             loaded_at: "2026-01-11 00:00:00"}
+          - {event_id: "31", actor_id: 7, actor_login: a, created_at: "2026-01-01 00:00:00",
+             loaded_at: "2026-01-10 00:00:00"}
+          - {event_id: "41", actor_id: 9, actor_login: z, created_at: "2026-01-02 00:00:00",
+             loaded_at: "2026-01-10 00:00:00"}
+    expect:
+      rows:
+        - {user_key: "7-1", actor_login: old, valid_from: "2025-12-31 00:00:00",
+           valid_to: "2026-01-01 00:00:00", is_current: false, loaded_at: "2026-01-11 00:00:00"}
+        - {user_key: "7-2", actor_login: a, valid_from: "2026-01-01 00:00:00",
+           valid_to: null, is_current: true, loaded_at: "2026-01-11 00:00:00"}
 
   - name: fct_events_user_version_respects_valid_from_after_login_reuse
     description: >
