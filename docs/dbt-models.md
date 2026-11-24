@@ -101,15 +101,17 @@ later event of that actor. Recomputing an actor twice is harmless; missing one i
 Invariants with tests (`tests/test_dbt_incremental.py`): building batch by batch on one DuckDB file gives exactly
 the same rows, column by column, as one full build over the union of the batches (except `loaded_at`); re-running an old batch,
 a duplicate batch or an empty batch changes no table; no duplicate `event_id`; a late event shifts the version of
-old facts; `--full-refresh` keeps the accumulated staging.
+old facts; `--full-refresh` keeps the accumulated staging. A `fct_events` built before it had `loaded_at` is
+upgraded by a normal run (macro `load_watermark` + `on_schema_change: append_new_columns`): that run recomputes every
+actor once and equals a full refresh, the next one writes only touched actors again.
 
 **When `--full-refresh` is needed** (the `full_refresh` input of `workflow_dispatch` in
 `pipeline.yml`):
 
 - Editing the seed `repos_data_ecosystem` (adding/removing repos): incremental only recomputes touched actors, so
   old events of a newly added repo do not become facts.
-- Changing the SQL logic of `fct_events` or changing columns (the model sets `on_schema_change: fail`; changing columns
-  without a full refresh makes `dbt build` fail).
+- Changing the SQL logic of `fct_events` or changing columns other than `loaded_at`: a normal run appends a new column
+  but fills it only for the touched actors, and keeps a removed one.
 
 `--full-refresh` rebuilds `fct_events` from staging but does **not** touch `stg_gharchive_events`
 (`full_refresh: false`): staging is the only place that keeps history, the lake is gone. To rebuild staging too,

@@ -307,6 +307,97 @@ def test_full_refresh_keeps_accumulated_staging(incremental, reference):
         assert_same_rows(model, snap[model], reference["union_all"][model])
 
 
+# ---------------------------------------------------------------- fct_events without loaded_at
+#
+# Snowflake still holds the fct_events of 2026-11-11 (commit ee38cf0, a plain table), which has no
+# loaded_at; no scheduled run passes --full-refresh (ticket T-0097). How a written row is seen:
+# is_late of every fact is flipped before a run, so a row the run leaves alone stays flipped.
+
+FCT_EVENTS = f"{GOLD_SCHEMA}.fct_events"
+FCT_ONLY = ("--exclude-resource-type", "test", "--exclude-resource-type", "unit_test")
+
+
+def _run_fct_events(base: Path, db: Path, batch: str, *args: str) -> None:
+    proc = run_dbt(
+        # seeds and models only: no data test, no unit test
+        ["build", "--select", "+fct_events", *FCT_ONLY, *args],
+        PROJECT,
+        write_profiles(base / "profiles", db),
+        base,
+        {"silver_gharchive_parquet": batch},
+    )
+    _require_ok(proc)
+
+
+def _fct_sql(db: Path, sql: str, *, read_only: bool = True) -> list[tuple]:
+    con = duckdb.connect(str(db), read_only=read_only)
+    try:
+        return con.execute(sql).fetchall()
+    finally:
+        con.close()
+
+
+def _fct_rows(db: Path) -> tuple[list, list]:
+    """(columns, sorted rows) of fct_events, load marker included."""
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        cur = con.execute(f"SELECT * FROM {FCT_EVENTS}")
+        return [c[0] for c in cur.description], sorted(cur.fetchall(), key=_sort_key)
+    finally:
+        con.close()
+
+
+def _assert_fct_equals_full_rebuild(base: Path, db: Path, batch: str) -> None:
+    """fct_events == the same db after --full-refresh (staging keeps its history and markers)."""
+    copy = base / "fct_full_rebuild.duckdb"
+    copy.write_bytes(db.read_bytes())
+    _run_fct_events(base, copy, batch, "--full-refresh")
+    expected = _fct_rows(copy)
+    assert LOAD_MARKER in expected[0]
+    assert_same_rows(FCT_EVENTS, _fct_rows(db), expected)
+
+
+def _flip_is_late(db: Path) -> None:
+    _fct_sql(db, f"UPDATE {FCT_EVENTS} SET is_late = NOT is_late", read_only=False)
+
+
+def _actors_written(db: Path) -> set[int]:
+    """Actors with a fact written since ``_flip_is_late`` (staging still has the right value)."""
+    rows = _fct_sql(
+        db,
+        f"SELECT DISTINCT f.actor_id FROM {FCT_EVENTS} f JOIN {STAGING} s USING (event_id) "
+        "WHERE f.is_late = s.is_late",
+    )
+    return {actor for (actor,) in rows}
+
+
+@pytest.fixture
+def old_fct_db(batches, tmp_path) -> Path:
+    db = tmp_path / "old_fct.duckdb"
+    _run_fct_events(tmp_path, db, batches["b1"])
+    _fct_sql(db, f"ALTER TABLE {FCT_EVENTS} DROP COLUMN {LOAD_MARKER}", read_only=False)
+    assert LOAD_MARKER not in _fct_rows(db)[0]
+    return db
+
+
+@pytest.mark.parametrize("batch", ["b1", "b2", "b3"])
+def test_fct_events_without_loaded_at_is_upgraded_by_a_normal_run(
+    old_fct_db, batches, tmp_path, batch
+):
+    _run_fct_events(tmp_path, old_fct_db, batches[batch])
+    _assert_fct_equals_full_rebuild(tmp_path, old_fct_db, batches[batch])
+
+
+def test_run_after_the_fct_events_upgrade_writes_only_touched_actors(old_fct_db, batches, tmp_path):
+    _run_fct_events(tmp_path, old_fct_db, batches["b1"])  # the upgrade
+    _flip_is_late(old_fct_db)
+    _run_fct_events(tmp_path, old_fct_db, batches["b1"])  # nothing new
+    assert _actors_written(old_fct_db) == set()
+
+    _run_fct_events(tmp_path, old_fct_db, batches["b2"])  # carol-old on a repo outside the seed
+    assert _actors_written(old_fct_db) == {1003}
+
+
 # ---------------------------------------------------------------- invariant 5: UTC
 
 
