@@ -46,7 +46,7 @@ Workflow `.github/workflows/databricks-bronze-silver.yml`:
 - Missing `DATABRICKS_HOST`: the Databricks step is skipped at step level, with a `::notice`, the workflow stays green,
   and there is no `runs.csv` row.
 - Path B of `.github/workflows/path-comparison.yml` (D3, `docs/path-comparison.md`) calls the same `run`
-  command (without `--verify-rerun`) on an hourly schedule after release, on the same
+  command (without `--verify-rerun`) when it is dispatched by hand, on the same
   `workspace.repopulse.*` tables. That job shares the concurrency group `databricks-bronze-silver` with
   this workflow, so the two never write silver at the same time.
 
