@@ -1,0 +1,64 @@
+name: MotherDuck transient copy
+
+# Copies the gold database into a new TRANSIENT MotherDuck database (docs/motherduck-storage.md):
+# failsafe is 1 day instead of 7, and MotherDuck only lets that be chosen at creation. Each run
+# waits for the owner's OK.
+#
+# - workflow_dispatch only (needs this file on `main`, the default branch). Needs the repo secret
+#   MOTHERDUCK_TOKEN.
+# - The source is only read. The target must not exist: CREATE DATABASE fails on an existing name.
+# - The run fails unless columns, row count and min/max loaded_at of every table match.
+# - It does not switch anything: the owner sets the repository variable MOTHERDUCK_DATABASE after.
+# - Nothing is uploaded: the repo is public and staging holds unmasked logins and hashes. The job
+#   log only shows table names, row counts and min/max loaded_at.
+#
+# Same concurrency group as the scheduled runs of pipeline.yml: no writer during the copy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "MotherDuck database to copy (only read)"
+        type: string
+        default: "repopulse"
+      target:
+        description: "new TRANSIENT database; must not exist yet"
+        type: string
+        default: "repopulse_transient"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipeline-motherduck
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Copy gold to a TRANSIENT database
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # MotherDuck rejects a DuckDB client newer than it supports: same pin as pipeline.yml.
+      - name: Install
+        run: pip install -e ".[dev]" "duckdb==1.5.6"
+
+      - name: Create, copy and verify
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          INPUT_SOURCE: ${{ inputs.source }}
+          INPUT_TARGET: ${{ inputs.target }}
+        run: |
+          if [ -z "$MOTHERDUCK_TOKEN" ]; then
+            echo "::error::missing repo secret MOTHERDUCK_TOKEN (the owner adds it)"
+            exit 1
+          fi
+          python -m repopulse.golddb migrate --source "$INPUT_SOURCE" --target "$INPUT_TARGET"

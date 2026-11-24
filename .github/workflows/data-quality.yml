@@ -7,7 +7,8 @@ name: Data quality
 # - checks: volume (each newest landing hour against the median of the hours before it) and
 #   freshness (age of the newest event) of main_staging.stg_gharchive_events. GH Archive is real
 #   data. After a scheduled pipeline run (workflow_run) or a manual dispatch it reads the
-#   `repopulse` database on MotherDuck (secret MOTHERDUCK_TOKEN, checked first). On a pull
+#   gold database on MotherDuck (repository variable MOTHERDUCK_DATABASE, unset = `repopulse`,
+#   docs/motherduck-storage.md; secret MOTHERDUCK_TOKEN, checked first). On a pull
 #   request it reads ci.duckdb built by `dbt build --target ci` from the seed fixture.
 # - alert: the only job allowed to write issues. It opens or updates one issue labelled
 #   data-incident per kind of check (template .github/ISSUE_TEMPLATE/data-incident.md); a hidden
@@ -89,7 +90,11 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
-        run: python -m repopulse.quality check --database md:repopulse --report out/dq-report.json
+          MOTHERDUCK_DATABASE: ${{ vars.MOTHERDUCK_DATABASE }}
+        run: |
+          db=(--database md:repopulse)
+          if [ -n "$MOTHERDUCK_DATABASE" ]; then db=(--database "md:$MOTHERDUCK_DATABASE"); fi
+          python -m repopulse.quality check "${db[@]}" --report out/dq-report.json
 
       - name: Job summary
         if: always()

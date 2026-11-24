@@ -16,7 +16,9 @@ name: Pages (dashboard)
 #   dbt build --target ci on the fixture seed, export from ci.duckdb, upload _site/ as a plain
 #   artifact to look at. No deploy, no secret.
 #
-# Secret: MOTHERDUCK_TOKEN (read access to the `repopulse` database) only reaches the two steps of
+# Database: repository variable MOTHERDUCK_DATABASE, unset = `repopulse`
+# (docs/motherduck-storage.md).
+# Secret: MOTHERDUCK_TOKEN (read access to that database) only reaches the two steps of
 # pages-build that need it, through `env:`; a missing token stops the job with a clear error and
 # no step prints it. Permissions: contents: read everywhere; only the deploy job gets pages: write
 # and id-token: write, in the github-pages environment. Deploys queue in their own concurrency
@@ -75,8 +77,11 @@ jobs:
       - name: Export public marts and runs.csv
         env:
           MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          MOTHERDUCK_DATABASE: ${{ vars.MOTHERDUCK_DATABASE }}
         run: |
-          python -m repopulse.export_site --db md:repopulse --schema main_public \
+          db=(--db md:repopulse)
+          if [ -n "$MOTHERDUCK_DATABASE" ]; then db=(--db "md:$MOTHERDUCK_DATABASE"); fi
+          python -m repopulse.export_site "${db[@]}" --schema main_public \
             --runs runs.csv --git-sha "$GITHUB_SHA" --out _site
 
       - uses: actions/upload-pages-artifact@v5

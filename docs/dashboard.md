@@ -86,13 +86,13 @@ environment itself; the exporter does not read or print the token.
 
 | Trigger | Job | What it does |
 |---|---|---|
-| `workflow_run` of `Pipeline (scheduled)`, `completed`, branch `main` | `pages-build` → `pages-deploy` | Only when the pipeline run is `success`, is not a `pull_request` (a PR's smoke does not deploy), and is on `main`. Exports from `md:repopulse` (schema `main_public`), `upload-pages-artifact`, then `configure-pages` + `deploy-pages` |
+| `workflow_run` of `Pipeline (scheduled)`, `completed`, branch `main` | `pages-build` → `pages-deploy` | Only when the pipeline run is `success`, is not a `pull_request` (a PR's smoke does not deploy), and is on `main`. Exports from the gold database on MotherDuck (variable `MOTHERDUCK_DATABASE`, unset = `repopulse`; [motherduck-storage.md](motherduck-storage.md); schema `main_public`), `upload-pages-artifact`, then `configure-pages` + `deploy-pages` |
 | `workflow_dispatch` (on `main`) | same as above | Manual rebuild |
 | `pull_request` (filtered by `paths:` `site/**`, exporter, workflow, `transform/models/public/**`) | `pages-preview` | `dbt build --target ci` on the fixture seed, export from `ci.duckdb`, upload `_site/` as a regular artifact `pages-preview-<PR number>`. No deploy, no secrets |
 
 - `workflow_run` only runs when the file is on `main` (after release), and GitHub runs the version on `main`:
   checkout takes the default branch, not the code of the triggering run.
-- Secret: only `MOTHERDUCK_TOKEN` (reads the `repopulse` database), only in the `env:` of the secret-check step and the
+- Secret: only `MOTHERDUCK_TOKEN` (reads the gold database), only in the `env:` of the secret-check step and the
   export step; if missing the job stops with a clear message.
 - Permissions: default `contents: read`; only `pages-deploy` has `pages: write` + `id-token: write`, environment
   `github-pages`. Deploys queue in the `pages-deploy` group and do not cancel the running one.

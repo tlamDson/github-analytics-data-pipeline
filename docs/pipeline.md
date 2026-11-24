@@ -21,7 +21,7 @@ The four heavy steps run through `python -m repopulse.pipeline timed --name <ste
 
 | Trigger | Data | dbt target | Secret |
 |---|---|---|---|
-| `schedule` (minute 23 of every hour) | 3 hours ending at now − 2h | `motherduck`, database `repopulse` | `MOTHERDUCK_TOKEN`, `PII_HASH_SALT` (if missing, stops right at the first step) |
+| `schedule` (minute 23 of every hour) | 3 hours ending at now − 2h | `motherduck`, gold database (variable `MOTHERDUCK_DATABASE`, unset = `repopulse`; [motherduck-storage.md](motherduck-storage.md)) | `MOTHERDUCK_TOKEN`, `PII_HASH_SALT` (if missing, stops right at the first step) |
 | `workflow_dispatch` | inputs `date`/`hour`/`hours` (default 3), `force`, `full_refresh` | same as above | same as above |
 | `pull_request` (filtered by `paths:`) | 1 real hour (now − 2h) | `ci` (local DuckDB), fixed fake salt | not needed; with `MOTHERDUCK_TOKEN` a smoke step is added |
 
@@ -43,7 +43,7 @@ the same data is not downloaded twice an hour.
 
 ## Pull request
 
-Does not touch the `repopulse` database. The chain runs on `ci.duckdb` and then:
+Does not touch the gold database (the setting is empty on a pull request). The chain runs on `ci.duckdb` and then:
 
 1. A second `dbt build` on the same parquet, comparing `python -m repopulse.pipeline counts` before/after with
    `diff`: a re-run must not change the row counts of staging and gold.

@@ -160,7 +160,7 @@ python -m repopulse.quality alert --report out/dq-report.json --run-url <url> --
 
 | Job | Trigger | What it does | Permissions |
 |---|---|---|---|
-| `checks` | `workflow_run` (after `Pipeline (scheduled)`), `workflow_dispatch`, `pull_request` | schedule/dispatch: `check --database md:repopulse` (if `MOTHERDUCK_TOKEN` is missing, `::error::` and stop); PR: `dbt build --target ci` (fixture seed) then `check --database ci.duckdb`. Report via artifact `data-quality-report-<run_id>` | `contents: read` |
+| `checks` | `workflow_run` (after `Pipeline (scheduled)`), `workflow_dispatch`, `pull_request` | schedule/dispatch: `check --database md:<gold database>` (variable `MOTHERDUCK_DATABASE`, unset = `repopulse`, [motherduck-storage.md](motherduck-storage.md); if `MOTHERDUCK_TOKEN` is missing, `::error::` and stop); PR: `dbt build --target ci` (fixture seed) then `check --database ci.duckdb`. Report via artifact `data-quality-report-<run_id>` | `contents: read` |
 | `alert` | after `checks` | PR: `alert --dry-run`; otherwise: `alert --repo $GITHUB_REPOSITORY` with `GH_TOKEN` | `contents: read`, **`issues: write`** (the only job) |
 | `fault-injection` | `pull_request`, `workflow_dispatch` | `faults` on **simulated** data with the fixed fake salt `not-a-secret-pr-salt`; artifact `data-quality-<run_id>` (only `out/`: report + `dq-fault-row.csv`, 30 days) | `contents: read` |
 | `reference-gap` | `pull_request`, `workflow_dispatch` | `gap --ingest` on real GH Archive hours; red if the missing hour is not caught | `contents: read` |

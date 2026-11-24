@@ -84,6 +84,9 @@ python -m repopulse.quality check --database ci.duckdb --report out/dq-report.js
 python -m repopulse.quality gap --ingest --report out/dq-gap.json   # a known-missing GH Archive hour must be caught (hours declared in [volume.reference])
 python -m repopulse.quality alert --report out/dq-report.json --run-url <url> --dry-run   # data-incident Issue; without --dry-run it calls gh (GH_TOKEN), one open issue per check kind
 
+python -m repopulse.golddb migrate --source repopulse --target repopulse_transient   # copy gold into a new TRANSIENT MotherDuck database and verify it (docs/motherduck-storage.md); only in the motherduck-transient.yml workflow, after the owner's OK
+python -m repopulse.golddb backup --database md:repopulse --out <directory outside the repo>   # staging to parquet, owner's machine only: refuses on GitHub Actions (public repo)
+
 python -m repopulse.export_site --db ci.duckdb --runs runs.csv --out _site   # 6 public marts + runs.csv -> site + Tableau CSV; a missing mart/column exits 1 (docs/dashboard.md)
 python -m http.server 8000 --bind 127.0.0.1 --directory _site                # preview the site locally
 
