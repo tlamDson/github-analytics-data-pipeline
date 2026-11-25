@@ -13,7 +13,7 @@ dbt = ["dbt-core>=1.12.7", "dbt-duckdb>=1.8"]
 snowflake = ["dbt-snowflake>=1.12.5"]  # only for .github/workflows/snowflake-port.yml
 databricks = ["dbt-databricks>=1.8"]  # only for dbt-databricks.yml and path-comparison.yml
 spark = ["pyspark>=3.5.9,<3.6", "delta-spark>=3.3,<3.4"]
-streaming = ["confluent-kafka>=2.6,<3"]  # only for .github/workflows/streaming.yml
+streaming = ["confluent-kafka>=2.16.2,<3"]  # only for .github/workflows/streaming.yml
 
 [build-system]
 requires = ["setuptools>=68"]
