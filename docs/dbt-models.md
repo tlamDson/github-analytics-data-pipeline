@@ -110,15 +110,17 @@ Invariants with tests (`tests/test_dbt_incremental.py`): building batch by batch
 the same rows, column by column, as one full build over the union of the batches (except `loaded_at`); re-running an old batch,
 a duplicate batch or an empty batch changes no table; no duplicate `event_id`; a late event shifts the version of
 old facts; `--full-refresh` keeps the accumulated staging; `dim_user` and its public copy write only the touched
-actors and nothing on a re-run, and equal their own full refresh, `loaded_at` included.
+actors and nothing on a re-run, and equal their own full refresh, `loaded_at` included. A `fct_events` built before
+it had `loaded_at` is upgraded by a normal run (macro `load_watermark` + `on_schema_change: append_new_columns`): that
+run recomputes every actor once and equals a full refresh, the next one writes only touched actors again.
 
 **When `--full-refresh` is needed** (the `full_refresh` input of `workflow_dispatch` in
 `pipeline.yml`):
 
 - Editing the seed `repos_data_ecosystem` (adding/removing repos): incremental only recomputes touched actors, so
   old events of a newly added repo do not become facts.
-- Changing the SQL logic of `fct_events` or changing columns (the model sets `on_schema_change: fail`; changing columns
-  without a full refresh makes `dbt build` fail).
+- Changing the SQL logic of `fct_events` or changing columns other than `loaded_at`: a normal run appends a new column
+  but fills it only for the touched actors, and keeps a removed one.
 - Changing the SQL logic of `dim_user` (versions, `is_bot`) or of its public copy, or changing `PII_HASH_SALT`: a
   normal run only rewrites the touched actors, so the others would keep the old rule or the old salt.
 
