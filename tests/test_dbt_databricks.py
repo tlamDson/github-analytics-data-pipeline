@@ -47,6 +47,8 @@ MACROS = TRANSFORM / "macros"
 MACRO_FILES = ("cross_db.sql", "mask_pii.sql")
 STAGING = TRANSFORM / "models" / "staging" / "stg_gharchive_events.sql"
 FCT = TRANSFORM / "models" / "gold" / "fct_events.sql"
+DIM_USER = TRANSFORM / "models" / "gold" / "dim_user.sql"
+PUB_DIM_USER = TRANSFORM / "models" / "public" / "pub_dim_user.sql"
 PROFILES = TRANSFORM / "profiles.yml"
 PYPROJECT = ROOT / "pyproject.toml"
 SALT = "d2-test-salt"
@@ -568,6 +570,44 @@ def test_fct_events_incremental_strategy_per_adapter(prefix, strategy):
     _, cfg = render_model(FCT, prefix)
     assert cfg.get("incremental_strategy") == strategy
     assert cfg.get("unique_key") == "event_id"
+
+
+@pytest.mark.parametrize("model", [DIM_USER, PUB_DIM_USER], ids=lambda p: p.stem)
+@pytest.mark.parametrize(
+    ("prefix", "strategy"),
+    [("databricks", "merge"), ("duckdb", "delete+insert"), ("snowflake", "delete+insert")],
+)
+def test_dim_user_incremental_strategy_per_adapter(model, prefix, strategy):
+    _, cfg = render_model(model, prefix)
+    assert cfg.get("materialized") == "incremental"
+    assert cfg.get("incremental_strategy") == strategy
+    assert cfg.get("unique_key") == "user_key"
+
+
+def _watermark(columns: list[str], relation: str = "gold.dim_user") -> str:
+    """``load_watermark`` rendered for a relation with these columns."""
+
+    class _Adapter:
+        @staticmethod
+        def get_columns_in_relation(rel):
+            assert rel == relation
+            return [{"name": c} for c in columns]
+
+    text = (MACROS / "load_watermark.sql").read_text(encoding="utf-8")
+    module = jinja2.Environment().from_string(text, globals={"adapter": _Adapter()}).module
+    return " ".join(str(module.load_watermark(relation)).split())
+
+
+@pytest.mark.parametrize("name", ["loaded_at", "LOADED_AT"], ids=["duckdb-databricks", "snowflake"])
+def test_load_watermark_reads_loaded_at_whatever_the_adapter_case(name):
+    assert _watermark(["user_key", name]) == (
+        "(select coalesce(max(loaded_at), cast('1970-01-01' as timestamp)) from gold.dim_user)"
+    )
+
+
+def test_load_watermark_of_a_table_without_loaded_at_does_not_reference_it():
+    sql = _watermark(["USER_KEY", "ACTOR_ID"])
+    assert sql == "cast('1970-01-01' as timestamp)"
 
 
 def _parse(work: Path, dbt_vars: dict | None = None) -> dict:

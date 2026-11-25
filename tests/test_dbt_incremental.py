@@ -3,7 +3,8 @@
 The scheduled pipeline (``.github/workflows/pipeline.yml``) gets a fresh lake on every run, so the
 silver parquet handed to dbt only holds the hours of that run. ``stg_gharchive_events`` therefore
 accumulates silver across runs (insert event ids not seen yet, existing copy wins) and
-``fct_events`` is incremental; dims and marts are rebuilt from the accumulated history.
+``dim_user``, ``pub_dim_user`` and ``fct_events`` are incremental (touched actors only); the marts
+are rebuilt from the accumulated history.
 
 Batches (built from the raw fixtures with ``silver_select_sql`` of dbt_helpers.py, no Spark):
 
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
 from datetime import date, datetime
 from pathlib import Path
 
@@ -38,6 +40,8 @@ from dbt_helpers import (  # noqa: E402
     GOLD_SCHEMA,
     PARQUET_ONLY_DIR,
     PROJECT,
+    PUBLIC_SCHEMA,
+    ci_salt,
     dedup_lines,
     run_dbt,
     silver_select_sql,
@@ -45,6 +49,8 @@ from dbt_helpers import (  # noqa: E402
 )
 from dbt_helpers import q as _q  # noqa: E402
 from dbt_helpers import require_ok as _require_ok  # noqa: E402
+
+from repopulse.spark.pii import hash_pii  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SMALL = FIXTURES / "gharchive_small"
@@ -165,14 +171,15 @@ def incremental(batches, tmp_path_factory) -> dict:
     base = tmp_path_factory.mktemp("dbt_incremental_db")
     db = base / "incremental.duckdb"
     profiles = write_profiles(base / "profiles", db)
-    procs, snaps = {}, {}
+    procs, snaps, public = {}, {}, {}
     for step, batch, extra in INCREMENTAL_STEPS:
         proc = run_dbt(
             ["build", *extra], PROJECT, profiles, base, {"silver_gharchive_parquet": batches[batch]}
         )
         procs[step] = proc
         snaps[step] = snapshot(db) if proc.returncode == 0 else None
-    return {"procs": procs, "snaps": snaps}
+        public[step] = _dim_user_tables(db)[PUB_DIM_USER] if proc.returncode == 0 else None
+    return {"procs": procs, "snaps": snaps, "public": public}
 
 
 @pytest.fixture(scope="session")
@@ -489,3 +496,191 @@ def test_timestamptz_near_midnight_keeps_utc_date_and_week(tmp_path):
         con.close()
     assert staged == (datetime(2026, 1, 5, 2),)
     assert row == (datetime(2026, 1, 5, 2), date(2026, 1, 5), date(2026, 1, 5))
+
+
+# ---------------------------------------------------------------- invariant 6: dim_user writes
+#
+# A run writes dim_user (gold and its masked public copy) in proportion to its new rows (ticket
+# T-0043). How a written row is seen: before a run is_bot of every gold row and is_current of every
+# public row are flipped, so a row the run leaves alone stays flipped and a row the run writes has
+# the right value again. The two columns differ on purpose: gold is_current stays right, so a public
+# row copied again from an untouched gold row shows up as written.
+
+DIM_USER = f"{GOLD_SCHEMA}.dim_user"
+PUB_DIM_USER = f"{PUBLIC_SCHEMA}.dim_user"
+BOT_RULE = (
+    "coalesce(right(lower(actor_login), 5) = '[bot]' OR right(lower(actor_login), 4) = '-bot', "
+    "false)"
+)
+
+
+def _run_dim_user(base: Path, db: Path, batch: str, *args: str, select: str = "+pub_dim_user"):
+    proc = run_dbt(
+        ["run", "--select", *select.split(), *args],
+        PROJECT,
+        write_profiles(base / "profiles", db),
+        base,
+        {"silver_gharchive_parquet": batch},
+    )
+    _require_ok(proc)
+
+
+def _execute(db: Path, *statements: str) -> None:
+    con = duckdb.connect(str(db))
+    try:
+        for sql in statements:
+            con.execute(sql)
+    finally:
+        con.close()
+
+
+def _rows(db: Path, sql: str) -> list[tuple]:
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        return con.execute(sql).fetchall()
+    finally:
+        con.close()
+
+
+def _flip_marks(db: Path) -> None:
+    _execute(
+        db,
+        f"UPDATE {DIM_USER} SET is_bot = NOT is_bot",
+        f"UPDATE {PUB_DIM_USER} SET is_current = NOT is_current",
+    )
+
+
+def _written(db: Path) -> dict[str, set[str]]:
+    """table -> actors with a row written since ``_flip_marks`` (masked ids for public)."""
+    salt = ci_salt()
+    is_current = {
+        hash_pii(key, salt): current
+        for key, current in _rows(db, f"SELECT user_key, is_current FROM {DIM_USER}")
+    }
+    gold = _rows(db, f"SELECT DISTINCT actor_id FROM {DIM_USER} WHERE is_bot = {BOT_RULE}")
+    public = _rows(db, f"SELECT user_key, actor_id, is_current FROM {PUB_DIM_USER}")
+    return {
+        DIM_USER: {str(actor) for (actor,) in gold},
+        PUB_DIM_USER: {actor for key, actor, current in public if is_current[key] == current},
+    }
+
+
+def _expected_written(actor_ids) -> dict[str, set[str]]:
+    salt = ci_salt()
+    ids = {str(a) for a in actor_ids}
+    return {DIM_USER: ids, PUB_DIM_USER: {hash_pii(a, salt) for a in ids}}
+
+
+def _versions(db: Path, actor_id: int) -> list[tuple]:
+    return _rows(
+        db,
+        f"SELECT user_key, actor_login, is_current FROM {DIM_USER} "
+        f"WHERE actor_id = {actor_id} ORDER BY version_number",
+    )
+
+
+def _dim_user_tables(db: Path) -> dict[str, tuple[list, list]]:
+    """table -> (columns, sorted rows), load marker included."""
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        out = {}
+        for table in (DIM_USER, PUB_DIM_USER):
+            cur = con.execute(f"SELECT * FROM {table}")
+            out[table] = ([c[0] for c in cur.description], sorted(cur.fetchall(), key=_sort_key))
+        return out
+    finally:
+        con.close()
+
+
+def _assert_equals_full_rebuild(base: Path, db: Path, batch: str) -> None:
+    """Both tables == the same db after --full-refresh (staging keeps its history and markers)."""
+    copy = base / "full_rebuild.duckdb"
+    shutil.copy(db, copy)
+    _run_dim_user(base, copy, batch, "--full-refresh")
+    actual, expected = _dim_user_tables(db), _dim_user_tables(copy)
+    for table in (DIM_USER, PUB_DIM_USER):
+        assert LOAD_MARKER in expected[table][0], table
+        assert_same_rows(table, actual[table], expected[table])
+
+
+@pytest.fixture
+def dim_user_db(batches, tmp_path) -> Path:
+    db = tmp_path / "dim_user.duckdb"
+    _run_dim_user(tmp_path, db, batches["b1"])
+    return db
+
+
+def test_late_event_writes_only_its_actor(dim_user_db, batches, tmp_path):
+    _flip_marks(dim_user_db)
+    _run_dim_user(tmp_path, dim_user_db, batches["b2"])  # carol-old, before every carol event
+    assert _versions(dim_user_db, 1003) == [
+        ("1003-1", "carol-old", False),
+        ("1003-2", "carol", True),
+    ]
+    assert _written(dim_user_db) == _expected_written({1003})
+
+
+def test_login_change_writes_only_the_actors_of_the_batch(dim_user_db, batches, tmp_path):
+    _flip_marks(dim_user_db)
+    _run_dim_user(tmp_path, dim_user_db, batches["b3"])  # bob was bobby, dave is now dave2
+    assert _versions(dim_user_db, 1002)[0] == ("1002-1", "bobby", False)
+    assert [v[1:] for v in _versions(dim_user_db, 1004)] == [("dave", False), ("dave2", True)]
+    newest = f"loaded_at = (SELECT max(loaded_at) FROM {STAGING})"
+    touched = {
+        a for (a,) in _rows(dim_user_db, f"SELECT DISTINCT actor_id FROM {STAGING} WHERE {newest}")
+    }
+    everyone = {a for (a,) in _rows(dim_user_db, f"SELECT DISTINCT actor_id FROM {STAGING}")}
+    assert {1002, 1004} <= touched < everyone
+    assert _written(dim_user_db) == _expected_written(touched)
+
+
+@pytest.mark.parametrize("batch", ["b1", "empty"])
+def test_rerun_without_new_events_writes_no_dim_user_row(dim_user_db, batches, tmp_path, batch):
+    _flip_marks(dim_user_db)
+    _run_dim_user(tmp_path, dim_user_db, batches[batch])
+    assert _written(dim_user_db) == _expected_written(set())
+
+
+def test_late_event_and_login_change_equal_a_full_rebuild(dim_user_db, batches, tmp_path):
+    for batch in ("b2", "b3", "b3", "overlap"):
+        _run_dim_user(tmp_path, dim_user_db, batches[batch])
+        _assert_equals_full_rebuild(tmp_path, dim_user_db, batches[batch])
+
+
+def test_steps_skipped_by_a_failed_run_are_caught_up(dim_user_db, batches, tmp_path):
+    """Run 2 stops after staging, run 3 after gold dim_user: run 4 still writes their actors."""
+    _run_dim_user(tmp_path, dim_user_db, batches["b2"], select="stg_gharchive_events")
+    _run_dim_user(tmp_path, dim_user_db, batches["b3"], select="stg_gharchive_events dim_user")
+    _run_dim_user(tmp_path, dim_user_db, batches["empty"])
+    _assert_equals_full_rebuild(tmp_path, dim_user_db, batches["empty"])
+
+
+def test_tables_built_before_the_load_marker_are_upgraded_by_a_normal_run(
+    dim_user_db, batches, tmp_path
+):
+    """The deployed tables have no loaded_at and no scheduled run passes --full-refresh."""
+    _execute(
+        dim_user_db,
+        *(f"ALTER TABLE {t} DROP COLUMN IF EXISTS loaded_at" for t in (DIM_USER, PUB_DIM_USER)),
+    )
+    _run_dim_user(tmp_path, dim_user_db, batches["b2"])
+    _assert_equals_full_rebuild(tmp_path, dim_user_db, batches["b2"])
+
+
+@pytest.mark.parametrize("step, ref", [("b2", "union_b1_b2"), ("b3", "union_all")])
+def test_public_dim_user_masks_the_gold_rows_of_a_full_build(incremental, reference, step, ref):
+    salt = ci_salt()
+    masked = {"user_key", "actor_id", "actor_login"}
+    gold_cols, gold_rows = reference[ref][DIM_USER]
+    expected = [
+        tuple(
+            hash_pii(str(v), salt) if c in masked and v is not None else v
+            for c, v in zip(gold_cols, row, strict=True)
+        )
+        for row in gold_rows
+    ]
+    cols, rows = incremental["public"][step]
+    keep = [i for i, c in enumerate(cols) if c != LOAD_MARKER]
+    assert [cols[i] for i in keep] == gold_cols
+    actual = [tuple(r[i] for i in keep) for r in rows]
+    assert sorted(actual, key=_sort_key) == sorted(expected, key=_sort_key)

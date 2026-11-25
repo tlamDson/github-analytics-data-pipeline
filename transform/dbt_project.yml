@@ -15,8 +15,9 @@ clean-targets: ["target", "dbt_packages"]
 #   otherwise (silver_gharchive_source: seed)                 -> seed fixture_silver_gharchive_events
 #
 # Materialization (docs/dbt-models.md): stg_gharchive_events incremental (append new event ids,
-# full_refresh: false), fct_events incremental (delete+insert, touched actors), dims and marts
-# table. Changing the seed repos_data_ecosystem needs `--full-refresh` for gold.
+# full_refresh: false), dim_user, pub_dim_user and fct_events incremental (delete+insert, touched
+# actors), dim_repo and marts table. Changing the seed repos_data_ecosystem needs
+# `--full-refresh` for gold.
 
 vars:
   # Salt of mask_pii (macros/mask_pii.sql) on target `ci` ONLY, when PII_HASH_SALT is unset.
